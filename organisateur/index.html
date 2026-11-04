@@ -16,13 +16,11 @@
 <section id="vueCreation">
   <div class="panneau">
     <h2>Nouvelle partie</h2>
-    <label for="cartes">Cartes (une par ligne, de la meilleure à la pire)</label>
+    <label for="cartes">Cartes possibles (une par ligne)</label>
     <textarea id="cartes"></textarea>
-    <p class="info">La 1re carte vaut le plus de points, la dernière en vaut 1.</p>
-    <div class="ligne">
-      <div><label for="nbManches">Manches</label><input id="nbManches" type="number" min="2" value="10"></div>
-      <div><label for="nbBoites">Boîtes</label><input id="nbBoites" type="number" min="2" max="6" value="3"></div>
-    </div>
+    <p class="info">À chaque manche, la boîte a une chance sur deux de contenir une de ces cartes, sinon elle est vide.</p>
+    <label for="nbManches">Nombre de manches</label>
+    <input id="nbManches" type="number" min="2" value="10">
     <button id="creer">Créer la partie</button>
   </div>
   <div class="panneau">
@@ -50,12 +48,17 @@
   <div class="panneau">
     <h2>Manche en cours</h2>
     <p class="message" id="statut"></p>
-    <div id="carteSecrete"></div>
-    <div class="boites" id="boites"></div>
+    <div class="scene" id="scene"></div>
     <div class="ligne">
       <button id="lancer">Lancer la manche</button>
       <button id="terminer" class="second">Terminer la partie</button>
     </div>
+  </div>
+
+  <div class="panneau">
+    <h2>Vue stream (OBS)</h2>
+    <p class="info">Ajoute un de ces liens comme « Source navigateur » dans OBS (1920 × 1080).</p>
+    <div id="liensStream"></div>
   </div>
 
   <div class="panneau">
@@ -69,29 +72,29 @@
 <script type="module">
 import { initDb } from "../commun/db.js";
 import * as J from "../commun/jeu.js";
+import { boiteHtml } from "../commun/ui.js";
 
 const $ = (id) => document.getElementById(id);
+const E = J.echapper;
 const db = await initDb();
 if (db.mode === "local") $("modeLocal").classList.remove("cache");
 $("cartes").value = J.CARTES_PAR_DEFAUT.join("\n");
 
 let code = null, partie = null, stop = null;
 
-function lienJoueur(c) {
-  return new URL(`../joueur/?code=${c}`, location.href).href;
-}
+const lien = (chemin) => new URL(chemin, location.href).href;
+const lienJoueur = (c) => lien(`../joueur/?code=${c}`);
 
 async function creer() {
   const cartes = $("cartes").value.split("\n").map((s) => s.trim()).filter(Boolean);
-  if (cartes.length < 2) return alert("Il faut au moins 2 cartes.");
+  if (cartes.length < 1) return alert("Il faut au moins une carte.");
   const nbManches = Math.max(2, parseInt($("nbManches").value) || 10);
-  const nbBoites = Math.min(6, Math.max(2, parseInt($("nbBoites").value) || 3));
   let c;
   for (let essai = 0; essai < 10; essai++) {
     c = J.genererCode();
     if (!(await db.lire(`parties/${c}`))) break;
   }
-  await db.definir(`parties/${c}`, J.nouvellePartie({ cartes, nbManches, nbBoites }));
+  await db.definir(`parties/${c}`, J.nouvellePartie({ cartes, nbManches }));
   ouvrir(c);
 }
 
@@ -118,54 +121,41 @@ function afficher() {
   const p = partie;
   $("titreManche").textContent = p.manche ? `Manche ${p.manche} / ${p.nbManches}` : "Joueurs";
   $("scores").innerHTML = ["j1", "j2"].map((id) => `
-    <div class="score"><div class="nom">${echapper(nomDe(id))}${p.bluffeur === id && p.etat !== "fin" ? " · bluffeur" : ""}</div>
-    <div class="pts">${J.score(p, id)} pts</div></div>`).join("");
+    <div class="score"><div class="nom">${E(nomDe(id))}${p.porteur === id && p.etat !== "fin" ? ' <span class="badge">boîte</span>' : ""}</div>
+    <div class="pts">${J.score(p, id)} pt${J.score(p, id) > 1 ? "s" : ""}</div></div>`).join("");
 
-  const bluff = p.bluffeur ? echapper(nomDe(p.bluffeur)) : "";
-  const cherche = p.bluffeur ? echapper(nomDe(J.chercheur(p))) : "";
-  const statuts = {
-    attente: J.joueursPrets(p) ? "Les deux joueurs sont là. Lance la première manche !" : "En attente des joueurs (code ou lien ci-dessus).",
-    annonce: `${bluff} prépare son annonce…`,
-    choix: `${bluff} annonce la boîte ${p.annonce}. ${cherche} choisit…`,
-    revelation: p.resultat ? (p.resultat.trouve
-      ? `Trouvé ! ${cherche} remporte la carte (+${p.resultat.points} pts).`
-      : `Raté ! ${bluff} garde la carte (+${p.resultat.points} pts).`) : "",
-    fin: finTexte(),
-  };
-  $("statut").textContent = statuts[p.etat] || "";
-
-  $("carteSecrete").innerHTML = (p.carte != null && p.etat !== "attente" && p.etat !== "fin")
-    ? `<div class="carte-jeu"><div class="info">Carte en jeu (visible seulement par toi et le bluffeur)</div>
-       <div class="titre">${echapper(p.cartes[p.carte])}</div><div class="pts">${J.points(p, p.carte)} pts · boîte ${p.boite}</div></div>` : "";
-
-  const enJeu = ["annonce", "choix", "revelation"].includes(p.etat);
-  $("boites").innerHTML = enJeu ? Array.from({ length: p.nbBoites }, (_, i) => {
-    const n = i + 1, cls = ["boite"];
-    if (n === p.boite) cls.push("vraie");
-    if (n === p.annonce) cls.push("annoncee");
-    if (n === p.choix) cls.push("choisie");
-    if (p.etat === "revelation") cls.push("ouverte", n === p.boite ? "pleine" : "vide");
-    return `<div class="${cls.join(" ")}">${n}${p.etat === "revelation" && n === p.choix ? "<small>choisie</small>" : ""}</div>`;
-  }).join("") : "";
+  const porteur = p.porteur ? E(nomDe(p.porteur)) : "";
+  const devin = p.porteur ? E(nomDe(J.devineur(p))) : "";
+  const choixPorteur = p.verite == null ? "" : ` <span class="badge ${p.verite ? "gris" : ""}">${p.verite ? "vérité" : "bluff"}</span>`;
+  let statut = "";
+  if (p.etat === "attente") statut = J.joueursPrets(p) ? "Les deux joueurs sont là. Lance la première manche !" : "En attente des joueurs (code ou lien ci-dessus).";
+  else if (p.etat === "annonce") statut = `${porteur} improvise sur le contenu de sa boîte…`;
+  else if (p.etat === "choix") statut = `${porteur} a choisi :${choixPorteur} — ${devin} doit dire vrai ou faux.`;
+  else if (p.etat === "revelation" && p.resultat) {
+    const g = E(nomDe(p.resultat.gagnant));
+    statut = `${devin} a répondu « ${p.reponse} » :${choixPorteur} → +1 pour ${g}` + (p.resultat.carte != null ? ` (+ la carte)` : "") + ".";
+  } else if (p.etat === "fin") {
+    const v = J.vainqueur(p);
+    statut = v ? `Partie terminée : ${E(nomDe(v))} gagne avec ${J.score(p, v)} points !` : "Partie terminée : égalité !";
+  }
+  $("statut").innerHTML = statut;
+  $("scene").innerHTML = ["annonce", "choix", "revelation"].includes(p.etat) ? boiteHtml(p, true) : "";
 
   $("lancer").disabled = !J.peutLancer(p);
   $("lancer").textContent = p.etat === "revelation"
     ? (p.manche >= p.nbManches ? "Voir le résultat final" : "Manche suivante") : "Lancer la manche";
   $("terminer").disabled = p.etat === "fin";
 
+  const pov = [["j1", `POV ${nomDe("j1")}`], ["j2", `POV ${nomDe("j2")}`], ["tout", "Tout voir"]];
+  $("liensStream").innerHTML = pov.map(([v, t]) => {
+    const u = lien(`../stream/?code=${code}&pov=${v}`);
+    return `<p><strong>${E(t)}</strong><br><a href="${u}" target="_blank">${u}</a></p>`;
+  }).join("");
+
   $("collections").innerHTML = ["j1", "j2"].map((id) => `
-    <div><strong>${echapper(nomDe(id))}</strong><ul class="collection">${
-      J.collection(p, id).map((c) => `<li><span>${echapper(p.cartes[c])}</span><span>${J.points(p, c)} pts</span></li>`).join("") || '<li class="info">Rien pour l\'instant</li>'
+    <div><strong>${E(nomDe(id))}</strong><ul class="collection">${
+      J.collection(p, id).map((c) => `<li><span>${E(p.cartes[c])}</span></li>`).join("") || '<li class="info">Rien pour l\'instant</li>'
     }</ul></div>`).join("");
-}
-
-function finTexte() {
-  const v = J.vainqueur(partie);
-  return v ? `Partie terminée : ${nomDe(v)} gagne avec ${J.score(partie, v)} pts !` : "Partie terminée : égalité !";
-}
-
-function echapper(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 $("creer").onclick = creer;

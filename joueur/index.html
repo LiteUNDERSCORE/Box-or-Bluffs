@@ -31,8 +31,8 @@
   </div>
   <div class="panneau">
     <p class="message" id="message"></p>
-    <div id="maCarte"></div>
-    <div class="boites" id="boites"></div>
+    <div class="scene" id="scene"></div>
+    <div class="choix cache" id="boutons"></div>
   </div>
   <div class="panneau">
     <h2>Ma collection</h2>
@@ -43,8 +43,10 @@
 <script type="module">
 import { initDb } from "../commun/db.js";
 import * as J from "../commun/jeu.js";
+import { boiteHtml } from "../commun/ui.js";
 
 const $ = (id) => document.getElementById(id);
+const E = J.echapper;
 const db = await initDb();
 if (db.mode === "local") $("modeLocal").classList.remove("cache");
 
@@ -64,7 +66,7 @@ async function rejoindre() {
     joueurs = joueurs || {};
     place = !joueurs.j1 ? "j1" : !joueurs.j2 ? "j2" : null;
     if (!place) return undefined; // partie pleine : on annule
-    joueurs[place] = { nom, collection: [] };
+    joueurs[place] = { nom, points: 0 };
     return joueurs;
   });
   if (!r.ok || !place) { $("erreur").textContent = "La partie est déjà complète."; return; }
@@ -81,76 +83,73 @@ function entrer(c, id) {
 
 const nomDe = (id) => (partie.joueurs && partie.joueurs[id] && partie.joueurs[id].nom) || "Adversaire";
 
+function boutons(liste) {
+  const zone = $("boutons");
+  zone.innerHTML = "";
+  zone.classList.toggle("cache", liste.length === 0);
+  for (const [texte, action, classe] of liste) {
+    const b = document.createElement("button");
+    b.textContent = texte;
+    if (classe) b.className = classe;
+    b.onclick = action;
+    zone.appendChild(b);
+  }
+}
+
 function afficher() {
   const p = partie, adv = J.AUTRE[moi];
-  const jeBluffe = p.bluffeur === moi;
+  const jePorte = p.porteur === moi;
   $("titreManche").textContent = p.manche ? `Manche ${p.manche} / ${p.nbManches}` : "Partie " + code;
   $("scores").innerHTML = [moi, adv].map((id) => `
-    <div class="score ${id === moi ? "moi" : ""}"><div class="nom">${echapper(id === moi ? nomDe(moi) + " (toi)" : (p.joueurs && p.joueurs[id] ? nomDe(id) : "En attente…"))}</div>
-    <div class="pts">${J.score(p, id)} pts</div></div>`).join("");
+    <div class="score ${id === moi ? "moi" : ""}"><div class="nom">${E(id === moi ? nomDe(moi) + " (toi)" : (p.joueurs && p.joueurs[id] ? nomDe(id) : "En attente…"))}</div>
+    <div class="pts">${J.score(p, id)} pt${J.score(p, id) > 1 ? "s" : ""}</div></div>`).join("");
 
-  let msg = "", carte = "", cliquable = false;
+  let msg = "", scene = "", bts = [];
   if (p.etat === "attente") {
     msg = J.joueursPrets(p) ? "Tout le monde est là, l'organisateur va lancer la partie…" : "En attente de ton adversaire…";
   } else if (p.etat === "annonce") {
-    if (jeBluffe) {
-      msg = `C'est toi le bluffeur ! Ta carte est dans la boîte ${p.boite}. Annonce une boîte à ${echapper(nomDe(adv))} : la vraie, ou un bluff.`;
-      carte = carteHtml(p);
-      cliquable = true;
-    } else msg = `${echapper(nomDe(adv))} a une carte cachée dans une boîte et prépare son annonce…`;
+    if (jePorte) {
+      msg = `À toi ! Regarde ta boîte et improvise : raconte à ${E(nomDe(adv))} ce qu'il y a dedans… ou pas 😏<br><span class="info">Puis indique en secret si tu dis vrai ou si tu bluffes.</span>`;
+      scene = boiteHtml(p, true);
+      bts = [["Je dis vrai", () => agir(J.declarer(p, true))], ["Je bluffe", () => agir(J.declarer(p, false)), "vide-btn"]];
+    } else {
+      msg = `${E(nomDe(adv))} ouvre sa boîte et improvise… écoute bien.`;
+      scene = boiteHtml(p, false);
+    }
   } else if (p.etat === "choix") {
-    if (jeBluffe) { msg = `Tu as annoncé la boîte ${p.annonce}. ${echapper(nomDe(adv))} réfléchit…`; carte = carteHtml(p); }
-    else { msg = `${echapper(nomDe(adv))} dit que la carte est dans la boîte ${p.annonce}. Vrai ou bluff ? Choisis ta boîte.`; cliquable = true; }
+    if (jePorte) {
+      msg = `Tu as choisi : <span class="badge ${p.verite ? "gris" : ""}">${p.verite ? "vérité" : "bluff"}</span><br>${E(nomDe(adv))} décide si tu dis vrai…`;
+      scene = boiteHtml(p, true);
+    } else {
+      msg = `${E(nomDe(adv))} a fini son annonce. Vrai ou faux ?`;
+      scene = boiteHtml(p, false);
+      bts = [["Vrai", () => agir(J.deviner(p, "vrai"))], ["Faux", () => agir(J.deviner(p, "faux")), "vide-btn"]];
+    }
   } else if (p.etat === "revelation" && p.resultat) {
     const r = p.resultat, gagne = r.gagnant === moi;
-    msg = (r.trouve ? (gagne ? "Trouvé ! " : "Il a trouvé… ") : (gagne ? "Bluff réussi ! " : "Raté ! "))
-      + (gagne ? `Tu remportes la carte (+${r.points} pts).` : `${echapper(nomDe(adv))} remporte la carte.`);
-    carte = carteHtml(p);
+    const verdict = p.verite ? "disait vrai" : "bluffait";
+    const quiParle = jePorte ? "Tu" : E(nomDe(adv));
+    msg = (gagne ? "Bien joué ! " : "Perdu… ") + `${quiParle} ${jePorte ? (p.verite ? "disais vrai" : "bluffais") : verdict}. `
+      + (gagne ? "+1 point pour toi" : `+1 point pour ${E(nomDe(adv))}`)
+      + (r.carte != null ? ` et la carte « ${E(p.cartes[r.carte])} »` : "") + ".";
+    scene = boiteHtml(p, true);
   } else if (p.etat === "fin") {
     const v = J.vainqueur(p);
-    msg = v === null ? "Partie terminée : égalité !" : v === moi ? `Victoire ! Tu gagnes avec ${J.score(p, moi)} pts 🏆` : `Partie terminée : ${echapper(nomDe(v))} gagne.`;
+    msg = v === null ? "Partie terminée : égalité !" : v === moi ? `Victoire ! Tu gagnes avec ${J.score(p, moi)} points 🏆` : `Partie terminée : ${E(nomDe(v))} gagne.`;
   }
   $("message").innerHTML = msg;
-  $("maCarte").innerHTML = carte;
+  $("scene").innerHTML = scene;
+  boutons(bts);
 
-  const enJeu = ["annonce", "choix", "revelation"].includes(p.etat);
-  $("boites").innerHTML = "";
-  if (enJeu) for (let n = 1; n <= p.nbBoites; n++) {
-    const b = document.createElement(cliquable ? "button" : "div");
-    const cls = ["boite"];
-    if (cliquable) cls.push("cliquable");
-    if (jeBluffe && p.etat !== "revelation" && n === p.boite) cls.push("vraie");
-    if (p.annonce === n && p.etat !== "annonce") cls.push("annoncee");
-    if (p.choix === n) cls.push("choisie");
-    if (p.etat === "revelation") cls.push("ouverte", n === p.boite ? "pleine" : "vide");
-    b.className = cls.join(" ");
-    b.innerHTML = p.etat === "revelation" && n === p.boite ? `${n}<small>${echapper(p.cartes[p.carte])}</small>` : String(n);
-    if (cliquable) b.onclick = () => jouer(n);
-    $("boites").appendChild(b);
-  }
-
-  $("collection").innerHTML = J.collection(p, moi)
-    .map((c) => `<li><span>${echapper(p.cartes[c])}</span><span>${J.points(p, c)} pts</span></li>`).join("")
+  $("collection").innerHTML = J.collection(p, moi).map((c) => `<li><span>${E(p.cartes[c])}</span></li>`).join("")
     || '<li class="info">Rien pour l\'instant</li>';
 }
 
-function carteHtml(p) {
-  return `<div class="carte-jeu"><div class="titre">${echapper(p.cartes[p.carte])}</div><div class="pts">${J.points(p, p.carte)} pts</div></div>`;
-}
-
-async function jouer(n) {
+async function agir(maj) {
   if (envoi) return;
   envoi = true;
-  const p = partie;
-  try {
-    if (p.etat === "annonce" && p.bluffeur === moi) await db.mettreAJour(`parties/${code}`, J.annoncer(p, n));
-    else if (p.etat === "choix" && J.chercheur(p) === moi) await db.mettreAJour(`parties/${code}`, J.choisir(p, n));
-    else envoi = false;
-  } catch (e) { envoi = false; alert(e.message); }
-}
-
-function echapper(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  try { await db.mettreAJour(`parties/${code}`, maj); }
+  catch (e) { envoi = false; alert(e.message); }
 }
 
 $("rejoindre").onclick = rejoindre;

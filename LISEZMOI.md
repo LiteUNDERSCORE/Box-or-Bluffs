@@ -3,13 +3,18 @@
 Deux sites dans un seul dépôt :
 - **Organisateur** : `…/organisateur/` → crée la partie, choisit les cartes, lance les manches.
 - **Joueur** : `…/joueur/` → chaque joueur l'ouvre sur son téléphone avec le code.
+- **Stream** : `…/stream/?code=XXXX&pov=j1` → vue pour OBS.
 
 ## Règles
-- À chaque manche, une carte est tirée au hasard et cachée au hasard dans une des boîtes.
-- Le **bluffeur** voit la carte et la boîte. Il annonce une boîte, vraie ou bluff.
-- Le **chercheur** choisit une boîte. S'il tombe sur la bonne, il gagne la carte. Sinon, le bluffeur la garde.
-- Les rôles s'inversent à chaque manche. Une carte ne sort qu'une fois.
-- Points : la 1re carte de la liste (Champion pilote) vaut le plus, la dernière vaut 1.
+- Une boîte par manche, tenue à tour de rôle par chaque joueur (le porteur).
+- Une fois sur deux, elle contient une carte tirée au hasard. Sinon, elle est vide.
+- Le porteur voit le contenu, improvise à l'oral, et appuie en secret sur « Je dis vrai » ou « Je bluffe ».
+- L'autre répond **Vrai** ou **Faux**. S'il a raison, il marque 1 point. Sinon, c'est le porteur.
+- Si la boîte contenait une carte, elle va dans la collection du gagnant de la manche.
+
+## Vue stream
+Dans la page organisateur, la section « Vue stream » donne 3 liens à mettre dans OBS (Source navigateur, 1920 × 1080) :
+POV joueur 1, POV joueur 2, ou Tout voir.
 
 ## Étape 1 – Firebase (5 min)
 1. Va sur https://console.firebase.google.com → **Créer un projet** (Google Analytics inutile).
@@ -31,6 +36,6 @@ Tant que `config.js` n'est pas rempli, le jeu marche en **mode test local** : ou
 (Ça ne marche pas en double-cliquant le fichier, il faut passer par GitHub Pages ou un petit serveur local.)
 
 ## À savoir
-- Changer les cartes : directement dans la zone de texte de l'organisateur avant de créer la partie (une par ligne, de la meilleure à la pire).
+- Changer les cartes : directement dans la zone de texte de l'organisateur avant de créer la partie (une par ligne).
 - Un joueur qui recharge sa page revient dans la partie.
 - Un petit malin qui fouille le code de la page pourrait voir la bonne boîte. Pour un jeu entre potes ça va, mais ce n'est pas anti-triche.

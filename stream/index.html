@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Box of Bluffs – Stream</title>
+<link rel="stylesheet" href="../commun/style.css">
+<style>
+  body { max-width: none; padding: 3vh 4vw; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+  .haut { display: flex; justify-content: space-between; align-items: center; }
+  .haut h1 { font-size: 4.5vh; }
+  .manche { font-size: 3vh; font-weight: 700; color: var(--doux); text-transform: uppercase; letter-spacing: .08em; }
+  .duel { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 3vw; margin-top: 2vh; }
+  .joueur { background: var(--carte); border: 2px solid var(--bord); border-radius: 2vh; padding: 1.6vh 2vw; }
+  .joueur.pov { border-color: var(--rouge); }
+  .joueur .nom { font-size: 3.4vh; font-weight: 900; }
+  .joueur .role { font-size: 2vh; color: var(--doux); text-transform: uppercase; letter-spacing: .08em; min-height: 2.4vh; }
+  .joueur .pts { font-size: 7vh; font-weight: 900; line-height: 1; }
+  .joueur.droite { text-align: right; }
+  .vs { font-size: 4vh; font-weight: 900; color: var(--rouge); }
+  .centre { padding-top: 7vh; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; }
+  .grosse-boite { width: 42vh; }
+  .grosse-boite .contenu { font-size: 4vh; }
+  .grosse-boite .point-int { font-size: 12vh; }
+  .grosse-boite::before { height: 24%; }
+  .grosse-boite.ouverte::before { transform: translateY(-5vh) rotate(-14deg); }
+  .bandeau-msg { font-size: 4vh; font-weight: 700; text-align: center; max-width: 80vw; }
+  .bandeau-msg .badge { font-size: 3vh; padding: .4vh 1.6vh; vertical-align: middle; }
+  .erreur-code { margin: auto; font-size: 3vh; }
+</style>
+</head>
+<body>
+<div class="bandeau"></div>
+<div class="haut">
+  <h1>Box of <span>Bluffs</span></h1>
+  <div class="manche" id="manche"></div>
+</div>
+<div class="duel" id="duel"></div>
+<div class="centre">
+  <div class="scene" id="scene" style="padding-top:0"></div>
+  <div class="bandeau-msg" id="msg"></div>
+</div>
+
+<script type="module">
+import { initDb } from "../commun/db.js";
+import * as J from "../commun/jeu.js";
+import { boiteHtml } from "../commun/ui.js";
+
+const $ = (id) => document.getElementById(id);
+const E = J.echapper;
+const params = new URLSearchParams(location.search);
+const code = (params.get("code") || "").toUpperCase();
+const pov = ["j1", "j2", "tout"].includes(params.get("pov")) ? params.get("pov") : "tout";
+
+if (!code) {
+  document.body.innerHTML = '<p class="erreur-code">Lien incomplet : ouvre ce lien depuis la page organisateur.</p>';
+} else {
+  const db = await initDb();
+  db.ecouter(`parties/${code}`, (p) => p && afficher(p));
+}
+
+function afficher(p) {
+  const nom = (id) => (p.joueurs && p.joueurs[id] && p.joueurs[id].nom) || "En attente…";
+  $("manche").textContent = p.manche ? `Manche ${p.manche} / ${p.nbManches}` : `Partie ${code}`;
+
+  const carteJoueur = (id, cote) => {
+    let role = "";
+    if (p.porteur && p.etat !== "fin") role = p.porteur === id ? "📦 a la boîte" : "🤔 doit deviner";
+    return `<div class="joueur ${cote} ${pov === id ? "pov" : ""}">
+      <div class="role">${role}</div><div class="nom">${E(nom(id))}</div><div class="pts">${J.score(p, id)}</div></div>`;
+  };
+  $("duel").innerHTML = carteJoueur("j1", "") + '<div class="vs">VS</div>' + carteJoueur("j2", "droite");
+
+  // Le contenu de la boîte n'est visible que pour le porteur (ou en mode « tout voir »),
+  // et pour tout le monde au moment de la révélation.
+  const voitContenu = pov === "tout" || pov === p.porteur || p.etat === "revelation";
+  const voitChoix = pov === "tout" || pov === p.porteur;
+  const badge = p.verite == null ? "" : `<span class="badge ${p.verite ? "gris" : ""}">${p.verite ? "vérité" : "bluff"}</span>`;
+  const porteur = E(nom(p.porteur)), devin = E(nom(J.devineur(p)));
+
+  let msg = "";
+  if (p.etat === "attente") msg = "La partie va commencer…";
+  else if (p.etat === "annonce") msg = `${porteur} improvise…`;
+  else if (p.etat === "choix") msg = voitChoix ? `${porteur} ${badge} — ${devin} : vrai ou faux ?` : `${devin} : vrai ou faux ?`;
+  else if (p.etat === "revelation" && p.resultat) {
+    msg = `${devin} répond « ${E(p.reponse)} » ${badge} → +1 ${E(nom(p.resultat.gagnant))}`;
+  } else if (p.etat === "fin") {
+    const v = J.vainqueur(p);
+    msg = v ? `🏆 ${E(nom(v))} remporte la partie !` : "Égalité !";
+  }
+  $("msg").innerHTML = msg;
+  $("scene").innerHTML = ["annonce", "choix", "revelation"].includes(p.etat) ? boiteHtml(p, voitContenu) : "";
+}
+</script>
+</body>
+</html>

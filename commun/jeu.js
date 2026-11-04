@@ -1,6 +1,11 @@
 // Règles du jeu (logique pure, sans base de données)
+//
+// Une boîte par manche, tenue à tour de rôle par chaque joueur (le « porteur »).
+// Une fois sur deux elle contient une carte, sinon elle est vide.
+// Le porteur voit le contenu, improvise à l'oral et indique en secret s'il dit vrai ou s'il bluffe.
+// L'autre (le « devineur ») répond « vrai » ou « faux ». Bonne réponse : +1 au devineur, sinon +1 au porteur.
+// Si la boîte contenait une carte, elle va dans la collection du gagnant de la manche.
 
-// Classement du meilleur au pire : la 1re carte rapporte le plus de points.
 export const CARTES_PAR_DEFAUT = [
   "Champion pilote",
   "Leader championnat pilote",
@@ -25,10 +30,6 @@ export const CARTES_PAR_DEFAUT = [
 
 export const AUTRE = { j1: "j2", j2: "j1" };
 
-export function points(partie, indexCarte) {
-  return partie.cartes.length - indexCarte;
-}
-
 export function genererCode(rand = Math.random) {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -36,40 +37,42 @@ export function genererCode(rand = Math.random) {
   return code;
 }
 
-export function nouvellePartie({ cartes, nbManches, nbBoites }) {
+export function nouvellePartie({ cartes, nbManches }) {
   return {
     cree: Date.now(),
     cartes,
-    nbManches: Math.min(nbManches, cartes.length),
-    nbBoites,
+    nbManches,
     etat: "attente",
     manche: 0,
-    bluffeur: null,
+    porteur: null,
+    pleine: null,
     carte: null,
-    boite: null,
-    annonce: null,
-    choix: null,
+    verite: null,
+    reponse: null,
     resultat: null,
     tirees: [],
     joueurs: { j1: null, j2: null },
   };
 }
 
+const liste = (v) => (v ? Object.values(v) : []);
+
 export function collection(partie, id) {
   const j = partie.joueurs && partie.joueurs[id];
-  return (j && j.collection) ? Object.values(j.collection) : [];
+  return j ? liste(j.collection) : [];
 }
 
 export function score(partie, id) {
-  return collection(partie, id).reduce((s, c) => s + points(partie, c), 0);
+  const j = partie.joueurs && partie.joueurs[id];
+  return (j && j.points) || 0;
 }
 
 export function joueursPrets(partie) {
   return !!(partie.joueurs && partie.joueurs.j1 && partie.joueurs.j2);
 }
 
-export function chercheur(partie) {
-  return partie.bluffeur ? AUTRE[partie.bluffeur] : null;
+export function devineur(partie) {
+  return partie.porteur ? AUTRE[partie.porteur] : null;
 }
 
 export function peutLancer(partie) {
@@ -79,41 +82,44 @@ export function peutLancer(partie) {
 // Renvoie les mises à jour (chemins relatifs à la partie)
 export function lancerManche(partie, rand = Math.random) {
   if (!peutLancer(partie)) throw new Error("Impossible de lancer la manche maintenant");
-  const tirees = partie.tirees ? Object.values(partie.tirees) : [];
+  if (partie.manche >= partie.nbManches) return { etat: "fin" };
+  const tirees = liste(partie.tirees);
   const pioche = partie.cartes.map((_, i) => i).filter((i) => !tirees.includes(i));
-  if (partie.manche >= partie.nbManches || pioche.length === 0) return { etat: "fin" };
-  const carte = pioche[Math.floor(rand() * pioche.length)];
-  const boite = 1 + Math.floor(rand() * partie.nbBoites);
+  const pleine = pioche.length > 0 && rand() < 0.5;
+  const carte = pleine ? pioche[Math.floor(rand() * pioche.length)] : null;
   const manche = partie.manche + 1;
   return {
     etat: "annonce",
     manche,
-    bluffeur: manche % 2 === 1 ? "j1" : "j2",
+    porteur: manche % 2 === 1 ? "j1" : "j2",
+    pleine,
     carte,
-    boite,
-    annonce: null,
-    choix: null,
+    verite: null,
+    reponse: null,
     resultat: null,
-    tirees: [...tirees, carte],
+    tirees: pleine ? [...tirees, carte] : tirees,
   };
 }
 
-export function annoncer(partie, boite) {
-  if (partie.etat !== "annonce") throw new Error("Pas le moment d'annoncer");
-  return { etat: "choix", annonce: boite };
+// Le porteur indique en secret s'il dit la vérité (true) ou s'il bluffe (false)
+export function declarer(partie, verite) {
+  if (partie.etat !== "annonce") throw new Error("Pas le moment de déclarer");
+  return { etat: "choix", verite: !!verite };
 }
 
-export function choisir(partie, boite) {
-  if (partie.etat !== "choix") throw new Error("Pas le moment de choisir");
-  const cherche = chercheur(partie);
-  const trouve = boite === partie.boite;
-  const gagnant = trouve ? cherche : partie.bluffeur;
+// reponse du devineur : "vrai" ou "faux"
+export function deviner(partie, reponse) {
+  if (partie.etat !== "choix") throw new Error("Pas le moment de répondre");
+  if (reponse !== "vrai" && reponse !== "faux") throw new Error("Réponse invalide");
+  const juste = (reponse === "vrai") === !!partie.verite;
+  const gagnant = juste ? devineur(partie) : partie.porteur;
   const maj = {
     etat: "revelation",
-    choix: boite,
-    resultat: { trouve, gagnant, carte: partie.carte, points: points(partie, partie.carte) },
+    reponse,
+    resultat: { juste, gagnant, carte: partie.pleine ? partie.carte : null },
   };
-  maj[`joueurs/${gagnant}/collection`] = [...collection(partie, gagnant), partie.carte];
+  maj[`joueurs/${gagnant}/points`] = score(partie, gagnant) + 1;
+  if (partie.pleine) maj[`joueurs/${gagnant}/collection`] = [...collection(partie, gagnant), partie.carte];
   return maj;
 }
 
@@ -125,4 +131,8 @@ export function vainqueur(partie) {
   const a = score(partie, "j1"), b = score(partie, "j2");
   if (a === b) return null;
   return a > b ? "j1" : "j2";
+}
+
+export function echapper(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
