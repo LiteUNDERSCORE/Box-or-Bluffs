@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Box of Bluffs – Joueur</title>
+<link rel="stylesheet" href="../commun/style.css">
+</head>
+<body>
+<div class="bandeau"></div>
+<h1>Box of <span>Bluffs</span></h1>
+<p class="sous">Espace joueur</p>
+<div id="modeLocal" class="mode-local cache">Mode test local : Firebase n'est pas encore configuré.</div>
+
+<section id="vueRejoindre">
+  <div class="panneau">
+    <h2>Rejoindre une partie</h2>
+    <label for="code">Code</label>
+    <input id="code" maxlength="4" placeholder="ABCD" autocapitalize="characters">
+    <label for="pseudo">Pseudo</label>
+    <input id="pseudo" maxlength="20" placeholder="Ton pseudo">
+    <button id="rejoindre">Rejoindre</button>
+    <p id="erreur" class="erreur"></p>
+  </div>
+</section>
+
+<section id="vueJeu" class="cache">
+  <div class="panneau">
+    <h2 id="titreManche">Partie</h2>
+    <div class="scores" id="scores"></div>
+  </div>
+  <div class="panneau">
+    <p class="message" id="message"></p>
+    <div id="maCarte"></div>
+    <div class="boites" id="boites"></div>
+  </div>
+  <div class="panneau">
+    <h2>Ma collection</h2>
+    <ul class="collection" id="collection"></ul>
+  </div>
+</section>
+
+<script type="module">
+import { initDb } from "../commun/db.js";
+import * as J from "../commun/jeu.js";
+
+const $ = (id) => document.getElementById(id);
+const db = await initDb();
+if (db.mode === "local") $("modeLocal").classList.remove("cache");
+
+const params = new URLSearchParams(location.search);
+if (params.get("code")) $("code").value = params.get("code").toUpperCase();
+
+let code = null, moi = null, partie = null, envoi = false;
+
+async function rejoindre() {
+  const c = $("code").value.trim().toUpperCase();
+  const nom = $("pseudo").value.trim();
+  $("erreur").textContent = "";
+  if (!nom) { $("erreur").textContent = "Choisis un pseudo."; return; }
+  if (!(await db.lire(`parties/${c}`))) { $("erreur").textContent = "Aucune partie avec ce code."; return; }
+  let place = null;
+  const r = await db.transaction(`parties/${c}/joueurs`, (joueurs) => {
+    joueurs = joueurs || {};
+    place = !joueurs.j1 ? "j1" : !joueurs.j2 ? "j2" : null;
+    if (!place) return undefined; // partie pleine : on annule
+    joueurs[place] = { nom, collection: [] };
+    return joueurs;
+  });
+  if (!r.ok || !place) { $("erreur").textContent = "La partie est déjà complète."; return; }
+  entrer(c, place);
+}
+
+function entrer(c, id) {
+  code = c; moi = id;
+  try { sessionStorage.setItem("bob-joueur", JSON.stringify({ code, moi })); } catch {}
+  $("vueRejoindre").classList.add("cache");
+  $("vueJeu").classList.remove("cache");
+  db.ecouter(`parties/${c}`, (p) => { partie = p; envoi = false; if (p) afficher(); });
+}
+
+const nomDe = (id) => (partie.joueurs && partie.joueurs[id] && partie.joueurs[id].nom) || "Adversaire";
+
+function afficher() {
+  const p = partie, adv = J.AUTRE[moi];
+  const jeBluffe = p.bluffeur === moi;
+  $("titreManche").textContent = p.manche ? `Manche ${p.manche} / ${p.nbManches}` : "Partie " + code;
+  $("scores").innerHTML = [moi, adv].map((id) => `
+    <div class="score ${id === moi ? "moi" : ""}"><div class="nom">${echapper(id === moi ? nomDe(moi) + " (toi)" : (p.joueurs && p.joueurs[id] ? nomDe(id) : "En attente…"))}</div>
+    <div class="pts">${J.score(p, id)} pts</div></div>`).join("");
+
+  let msg = "", carte = "", cliquable = false;
+  if (p.etat === "attente") {
+    msg = J.joueursPrets(p) ? "Tout le monde est là, l'organisateur va lancer la partie…" : "En attente de ton adversaire…";
+  } else if (p.etat === "annonce") {
+    if (jeBluffe) {
+      msg = `C'est toi le bluffeur ! Ta carte est dans la boîte ${p.boite}. Annonce une boîte à ${echapper(nomDe(adv))} : la vraie, ou un bluff.`;
+      carte = carteHtml(p);
+      cliquable = true;
+    } else msg = `${echapper(nomDe(adv))} a une carte cachée dans une boîte et prépare son annonce…`;
+  } else if (p.etat === "choix") {
+    if (jeBluffe) { msg = `Tu as annoncé la boîte ${p.annonce}. ${echapper(nomDe(adv))} réfléchit…`; carte = carteHtml(p); }
+    else { msg = `${echapper(nomDe(adv))} dit que la carte est dans la boîte ${p.annonce}. Vrai ou bluff ? Choisis ta boîte.`; cliquable = true; }
+  } else if (p.etat === "revelation" && p.resultat) {
+    const r = p.resultat, gagne = r.gagnant === moi;
+    msg = (r.trouve ? (gagne ? "Trouvé ! " : "Il a trouvé… ") : (gagne ? "Bluff réussi ! " : "Raté ! "))
+      + (gagne ? `Tu remportes la carte (+${r.points} pts).` : `${echapper(nomDe(adv))} remporte la carte.`);
+    carte = carteHtml(p);
+  } else if (p.etat === "fin") {
+    const v = J.vainqueur(p);
+    msg = v === null ? "Partie terminée : égalité !" : v === moi ? `Victoire ! Tu gagnes avec ${J.score(p, moi)} pts 🏆` : `Partie terminée : ${echapper(nomDe(v))} gagne.`;
+  }
+  $("message").innerHTML = msg;
+  $("maCarte").innerHTML = carte;
+
+  const enJeu = ["annonce", "choix", "revelation"].includes(p.etat);
+  $("boites").innerHTML = "";
+  if (enJeu) for (let n = 1; n <= p.nbBoites; n++) {
+    const b = document.createElement(cliquable ? "button" : "div");
+    const cls = ["boite"];
+    if (cliquable) cls.push("cliquable");
+    if (jeBluffe && p.etat !== "revelation" && n === p.boite) cls.push("vraie");
+    if (p.annonce === n && p.etat !== "annonce") cls.push("annoncee");
+    if (p.choix === n) cls.push("choisie");
+    if (p.etat === "revelation") cls.push("ouverte", n === p.boite ? "pleine" : "vide");
+    b.className = cls.join(" ");
+    b.innerHTML = p.etat === "revelation" && n === p.boite ? `${n}<small>${echapper(p.cartes[p.carte])}</small>` : String(n);
+    if (cliquable) b.onclick = () => jouer(n);
+    $("boites").appendChild(b);
+  }
+
+  $("collection").innerHTML = J.collection(p, moi)
+    .map((c) => `<li><span>${echapper(p.cartes[c])}</span><span>${J.points(p, c)} pts</span></li>`).join("")
+    || '<li class="info">Rien pour l\'instant</li>';
+}
+
+function carteHtml(p) {
+  return `<div class="carte-jeu"><div class="titre">${echapper(p.cartes[p.carte])}</div><div class="pts">${J.points(p, p.carte)} pts</div></div>`;
+}
+
+async function jouer(n) {
+  if (envoi) return;
+  envoi = true;
+  const p = partie;
+  try {
+    if (p.etat === "annonce" && p.bluffeur === moi) await db.mettreAJour(`parties/${code}`, J.annoncer(p, n));
+    else if (p.etat === "choix" && J.chercheur(p) === moi) await db.mettreAJour(`parties/${code}`, J.choisir(p, n));
+    else envoi = false;
+  } catch (e) { envoi = false; alert(e.message); }
+}
+
+function echapper(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+$("rejoindre").onclick = rejoindre;
+
+// Retour dans la partie après un rechargement de la page
+try {
+  const s = JSON.parse(sessionStorage.getItem("bob-joueur"));
+  if (s && (!params.get("code") || params.get("code").toUpperCase() === s.code)) {
+    const p = await db.lire(`parties/${s.code}`);
+    if (p && p.joueurs && p.joueurs[s.moi]) entrer(s.code, s.moi);
+  }
+} catch {}
+</script>
+</body>
+</html>
